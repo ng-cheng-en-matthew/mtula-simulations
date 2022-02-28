@@ -1,115 +1,123 @@
-import itertools
 import numpy as np
-import pandas as pd
-
-from tqdm import tqdm
-from joblib import Parallel, delayed
-from progress_bar import tqdm_joblib
-
-from sampler import LangevinSampler
 
 
-def draw_samples(sampler, theta0, n_chains=100):
-    # dimension of sample
-    d = len(np.ravel(np.array(theta0).reshape(-1)))
+TARG_LST = [
+    'double_well',
+    'gaussian',
+    'gaussian_mixture'
+]
 
-    # initialise arrays to store moments
-    moment_1st = np.zeros((n_chains, d))
-    moment_2nd = np.zeros((n_chains, d))
-
-    # initialise array to store samples
-    samples = np.zeros((n_chains, d))
-
-    for i in range(n_chains):
-        # update status
-        #time_start = time.time()
-        #print(f'Markov Chain: {i + 1}/{n_chains}')
-
-        # run a single markov chain
-        theta_arr = sampler.sample(theta0, return_arr=True)
-
-        # update moments
-        moment_1st[i] = theta_arr.mean(axis=0)
-        moment_2nd[i] = (theta_arr ** 2).mean(axis=0)
-
-        # update sample
-        samples[i] = theta_arr[-1]
-
-        # display time taken
-        # print(f'Time Taken: {round(time.time()-time_start, 3)} seconds \n')
-
-    return samples, moment_1st, moment_2nd
+ALGO_LST = [
+    'ULA',
+    'MALA',
+    'TULA_BDMS18',
+    'TULA_LNSZ21',
+    'TULA_new'
+]
 
 
-def convergence_results(param_grid, n_jobs=-1):
-    # fill in missing parameters
-    for key in ['Sigma', 'a']:
-        if param_grid.get(key) == None:
-            param_grid[key] = []
+class LangevinSampler:
+    def __init__(self, targ, algo, step=0.001, beta=1, Sigma=None, a=None):
+        assert targ in TARG_LST
+        assert algo in ALGO_LST
 
-    # expand parameter grid
-    param_grid_expanded = list(itertools.product(
-        [v for v in param_grid['targ'] if not v in ['gaussian', 'gaussian_mixture']],
-        param_grid['algo'],
-        param_grid['step'],
-        [None],
-        [None]
-    )) + list(itertools.product(
-        [v for v in param_grid['targ'] if v == 'gaussian'],
-        param_grid['algo'],
-        param_grid['step'],
-        param_grid['Sigma'],
-        [None]
-    )) + list(itertools.product(
-        [v for v in param_grid['targ'] if v == 'gaussian_mixture'],
-        param_grid['algo'],
-        param_grid['step'],
-        [None],
-        param_grid['a'],
-    ))
+        self.targ = targ
+        self.algo = algo
+        self.beta = beta
+        self.step = step
+        self.adjust = (algo == 'MALA')
 
-    # function that runs markov chain for a single configuration
-    def _convergence_results_single_config(targ, algo, step, Sigma, a):
-        # intialise empty list to store results
-        results_df_lst = []
+        self.Sigma = Sigma  # for gaussian target
+        self.a = a  # for mixed gaussian target
 
-        # initialise sampler
-        sampler = LangevinSampler(targ, algo, step=step, Sigma=Sigma, a=a)
+        if targ == 'double_well':
+            self.r = 2
 
-        # iterate over initial starting points
-        for theta0 in param_grid['theta0']:
-            # number of independent Markov chains
-            n_chains = param_grid['n_chains']
+        elif targ == 'gaussian' or targ == 'gaussian_mixture':
+            self.r = 0
 
-            # dimension of samples
-            d = len(np.ravel(np.array(theta0).reshape(-1)))
 
-            # draw samples and compute moment estimates
-            samples, moment_1st, moment_2nd = draw_samples(sampler, theta0, n_chains=n_chains)
+    def _potential(self, theta):
+        if self.targ == 'double_well':
+            return (1 / 4) * np.dot(theta, theta)**2 - (1/2) * np.dot(theta, theta)
 
-            # store results in dataframe
-            results_df = pd.DataFrame({
-                'target': [targ] * n_chains,
-                'algo': [algo] * n_chains,
-                'step': [step] * n_chains
-            })
+        elif self.targ == 'gaussian':
+            return (1 / 2) * ((theta.dot(np.linalg.inv(self.Sigma))).dot(theta))
 
-            results_df.loc[:, 'theta0'] = [theta0] * n_chains
-            results_df.loc[:, 'Sigma'] = [Sigma] * n_chains
-            results_df.loc[:, 'a'] = [a] * n_chains
-            results_df.loc[:, [f'moment_1st_{i + 1}' for i in range(d)]] = moment_1st
-            results_df.loc[:, [f'moment_2nd_{i + 1}' for i in range(d)]] = moment_2nd
-            results_df.loc[:, [f'component_{i + 1}' for i in range(d)]] = samples
-            results_df_lst.append(results_df)
+        elif self.targ == 'gaussian_mixture':
+            return (1 / 2) * (np.linalg.norm(theta-self.a)**2) - np.log(1 + np.exp(-2*np.dot(theta, self.a)))
 
-        return pd.concat(results_df_lst)
 
-    # run markov chains in parallel
-    with tqdm_joblib(tqdm(desc='Simulation', total=len(param_grid_expanded))) as progress_bar:
-        results_df_lst = Parallel(n_jobs=n_jobs)(
-            delayed(_convergence_results_single_config)(
-                targ, algo, step, Sigma, a
-            ) for (targ, algo, step, Sigma, a) in param_grid_expanded
-        )
+    def _gradient(self, theta):
+        if self.targ == 'double_well':
+            return (np.dot(theta, theta) - 1) * theta
 
-    return pd.concat(results_df_lst)
+        elif self.targ == 'gaussian':
+            return np.linalg.inv(self.Sigma).dot(theta)
+
+        elif self.targ == 'gaussian_mixture':
+            return theta - self.a + 2 * self.a / (1 + np.exp(2*np.dot(theta, self.a)))
+
+
+    def _gradient_tamed(self, theta):
+        if self.algo == 'ULA' or self.algo == 'MALA':
+            return self._gradient(theta)
+
+        elif self.algo == 'TULA_BDMS18':
+            grad = self._gradient(theta)
+            return grad / (1 + (self.step) * np.linalg.norm(grad))
+
+        elif self.algo == 'TULA_LNSZ21':
+            return self._gradient(theta) / (1 + (self.step**0.5) * (np.linalg.norm(theta)**self.r))
+
+        elif self.algo == 'TULA_new':
+            return self._gradient(theta) / ((1 + self.step*(np.dot(theta, theta)**self.r))**0.5)
+
+
+    def sample(self, theta0, n_iter=10**5, n_burnin=10**4, return_arr=False):
+        # flatten array to 1d
+        theta = np.ravel(np.array(theta0).reshape(-1))
+
+        # obtain dimension
+        d = len(theta)
+
+        # initialise array to store samples after burn-in period
+        theta_arr = np.zeros((n_iter, d))
+
+        # run algorithm
+        for n in np.arange(n_iter + n_burnin):
+
+            # proposal
+            proposal = theta - self.step * self._gradient_tamed(theta) + np.sqrt(
+                2 * self.step / self.beta) * np.random.normal(size=d)
+
+            # if metropolis-hastings version is run
+            if self.adjust:
+
+                # potential at current iteration and proposal
+                U_proposal = self._potential(proposal)
+                U_theta = self._potential(theta)
+
+                # (tamed) gradient at current iteration and proposal
+                h_proposal = self._gradient_tamed(proposal)
+                h_theta = self._gradient_tamed(theta)
+
+                # logarithm of acceptance probability
+                log_acceptance_prob = -self.beta * (U_proposal - U_theta) + \
+                                      (1 / (4 * self.step)) * (np.linalg.norm(
+                    proposal - theta + self.step * h_theta)**2 - np.linalg.norm(
+                    theta - proposal + self.step * h_proposal)**2)
+
+                # determine acceptance
+                if np.log(np.random.uniform(size=1)) <= log_acceptance_prob:
+                    theta = proposal
+
+            # if not, then an unadjusted version is run
+            else:
+                theta = proposal
+
+            # include samples after burn-in in final output
+            if (n >= n_burnin) and return_arr:
+                theta_arr[n - n_burnin] = theta
+
+        return theta if (not return_arr) else theta_arr
