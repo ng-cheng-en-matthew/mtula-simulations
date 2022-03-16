@@ -10,9 +10,8 @@ TARG_LST = [
 ALGO_LST = [
     'ULA',
     'MALA',
-    'TULA_BDMS18',
-    'TULA_LNSZ21',
-    'TULA_new'
+    'TULA',
+    'mTULA'
 ]
 
 
@@ -63,14 +62,14 @@ class LangevinSampler:
         if self.algo == 'ULA' or self.algo == 'MALA':
             return self._gradient(theta)
 
-        elif self.algo == 'TULA_BDMS18':
+        elif self.algo == 'TULA':
             grad = self._gradient(theta)
             return grad / (1 + (self.step) * np.linalg.norm(grad))
 
-        elif self.algo == 'TULA_LNSZ21':
-            return self._gradient(theta) / (1 + (self.step**0.5) * (np.linalg.norm(theta)**self.r))
+        #elif self.algo == 'TULA_LNSZ21':
+        #    return self._gradient(theta) / (1 + (self.step**0.5) * (np.linalg.norm(theta)**self.r))
 
-        elif self.algo == 'TULA_new':
+        elif self.algo == 'mTULA':
             return self._gradient(theta) / ((1 + self.step*(np.dot(theta, theta)**self.r))**0.5)
 
 
