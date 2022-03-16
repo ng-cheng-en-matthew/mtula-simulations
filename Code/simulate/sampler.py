@@ -74,7 +74,13 @@ class LangevinSampler:
             return self._gradient(theta) / ((1 + self.step*(np.dot(theta, theta)**self.r))**0.5)
 
 
-    def sample(self, theta0, n_iter=10**5, n_burnin=10**4, return_arr=False):
+    def sample(self, theta0, n_iter=10**5, n_burnin=10**4, return_arr=False, runtime=10**4):
+        # if runtime is specified
+        if runtime is not None:
+            # replace the number of iterations and burn-in samples such that step*n_iter is constant
+            n_iter = runtime // self.step
+            n_burnin = n_iter
+
         # flatten array to 1d
         theta = np.ravel(np.array(theta0).reshape(-1))
 
@@ -93,7 +99,6 @@ class LangevinSampler:
 
             # if metropolis-hastings version is run
             if self.adjust:
-
                 # potential at current iteration and proposal
                 U_proposal = self._potential(proposal)
                 U_theta = self._potential(theta)
