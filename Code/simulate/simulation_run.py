@@ -43,15 +43,18 @@ def draw_samples(sampler, theta0, n_chains=100):
 
 def convergence_results(param_grid, n_jobs=-1):
     # fill in missing parameters
-    for key in ['Sigma', 'a']:
+    for key in ['Sigma', 'a', 'alpha', 'lambd', 'tau']:
         if param_grid.get(key) == None:
             param_grid[key] = []
 
     # expand parameter grid
     param_grid_expanded = list(itertools.product(
-        [v for v in param_grid['targ'] if not v in ['gaussian', 'gaussian_mixture']],
+        [v for v in param_grid['targ'] if not v in ['gaussian', 'gaussian_mixture', 'ginzburg_landau']],
         param_grid['algo'],
         param_grid['step'],
+        [None],
+        [None],
+        [None],
         [None],
         [None]
     )) + list(itertools.product(
@@ -59,6 +62,9 @@ def convergence_results(param_grid, n_jobs=-1):
         param_grid['algo'],
         param_grid['step'],
         param_grid['Sigma'],
+        [None],
+        [None],
+        [None],
         [None]
     )) + list(itertools.product(
         [v for v in param_grid['targ'] if v == 'gaussian_mixture'],
@@ -66,15 +72,27 @@ def convergence_results(param_grid, n_jobs=-1):
         param_grid['step'],
         [None],
         param_grid['a'],
+        [None],
+        [None],
+        [None]
+    )) + list(itertools.product(
+        [v for v in param_grid['targ'] if v == 'ginzburg_landau'],
+        param_grid['algo'],
+        param_grid['step'],
+        [None],
+        [None],
+        param_grid['alpha'],
+        param_grid['lambd'],
+        param_grid['tau']
     ))
 
     # function that runs markov chain for a single configuration
-    def _convergence_results_single_config(targ, algo, step, Sigma, a):
+    def _convergence_results_single_config(targ, algo, step, Sigma, a, alpha, lambd, tau):
         # intialise empty list to store results
         results_df_lst = []
 
         # initialise sampler
-        sampler = LangevinSampler(targ, algo, step=step, Sigma=Sigma, a=a)
+        sampler = LangevinSampler(targ, algo, step=step, Sigma=Sigma, a=a, alpha=alpha, lambd=lambd, tau=tau)
 
         # iterate over initial starting points
         for theta0 in param_grid['theta0']:
@@ -97,6 +115,9 @@ def convergence_results(param_grid, n_jobs=-1):
             results_df.loc[:, 'theta0'] = [theta0] * n_chains
             results_df.loc[:, 'Sigma'] = [Sigma] * n_chains
             results_df.loc[:, 'a'] = [a] * n_chains
+            results_df.loc[:, 'alpha'] = [alpha] * n_chains
+            results_df.loc[:, 'lambd'] = [lambd] * n_chains
+            results_df.loc[:, 'tau'] = [tau] * n_chains
             results_df.loc[:, [f'moment_1st_{i + 1}' for i in range(d)]] = moment_1st
             results_df.loc[:, [f'moment_2nd_{i + 1}' for i in range(d)]] = moment_2nd
             results_df.loc[:, [f'component_{i + 1}' for i in range(d)]] = samples
@@ -108,8 +129,8 @@ def convergence_results(param_grid, n_jobs=-1):
     with tqdm_joblib(tqdm(desc='Simulation', total=len(param_grid_expanded))) as progress_bar:
         results_df_lst = Parallel(n_jobs=n_jobs)(
             delayed(_convergence_results_single_config)(
-                targ, algo, step, Sigma, a
-            ) for (targ, algo, step, Sigma, a) in param_grid_expanded
+                targ, algo, step, Sigma, a, alpha, lambd, tau
+            ) for (targ, algo, step, Sigma, a, alpha, lambd, tau) in param_grid_expanded
         )
 
     return pd.concat(results_df_lst)
