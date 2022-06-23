@@ -9,6 +9,9 @@ from progress_bar import tqdm_joblib
 from sampler import LangevinSampler
 
 
+"""
+Draws samples from single sampler by running markov chains sequentially
+"""
 def draw_samples(sampler, theta0, n_chains=100):
     # dimension of sample
     d = len(np.ravel(np.array(theta0).reshape(-1)))
@@ -21,10 +24,6 @@ def draw_samples(sampler, theta0, n_chains=100):
     samples = np.zeros((n_chains, d))
 
     for i in range(n_chains):
-        # update status
-        #time_start = time.time()
-        #print(f'Markov Chain: {i + 1}/{n_chains}')
-
         # run a single markov chain
         theta_arr = sampler.sample(theta0, return_arr=True)
 
@@ -35,12 +34,52 @@ def draw_samples(sampler, theta0, n_chains=100):
         # update sample
         samples[i] = theta_arr[-1]
 
-        # display time taken
-        # print(f'Time Taken: {round(time.time()-time_start, 3)} seconds \n')
-
     return samples, moment_1st, moment_2nd
 
 
+"""
+Draws samples from single sampler by running markov chains in parallel. Example of usage:
+
+d = 100
+sampler = LangevinSampler(targ='double_well', algo='mTULA', step = 0.0001)
+theta0 = np.zeros(d)
+results_df = draw_samples_parallel(sampler, theta0, n_chains=250)
+"""
+def draw_samples_parallel(sampler, theta0, runtime=200, n_chains=100, n_jobs=-1):
+    # dimension of sample
+    d = len(np.ravel(np.array(theta0).reshape(-1)))
+
+    # running a single markov chain
+    def _run_single_markov_chain():
+        return pd.DataFrame(
+            [sampler.sample(theta0, runtime=runtime)],
+            columns=[f'component_{i + 1}' for i in range(d)]
+        )
+
+    # run markov chains in parallel
+    with tqdm_joblib(tqdm(desc='Markov Chains', total=n_chains)) as progress_bar:
+        samples_df_lst = Parallel(n_jobs=n_jobs)(
+            delayed(_run_single_markov_chain)() for i in range(n_chains)
+        )
+
+    return pd.concat(samples_df_lst, ignore_index=True)
+
+
+"""
+Draws samples from multiple samplers specified by a given parameter grid. Example of usage:
+
+d = 100
+param_grid = {
+    'targ': ['double_well', 'gaussian', 'gaussian_mixture'],
+    'algo': ['ULA', 'MALA', 'TULA', 'mTULA'],
+    'step': [0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
+    'theta0': [np.zeros(d)],
+    'n_chains': 250,
+    'Sigma': [np.eye(d)],
+    'a': [2*np.ones(d)/(np.sqrt(d))]
+}
+results_df = convergence_results(param_grid)
+"""
 def convergence_results(param_grid, n_jobs=-1):
     # fill in missing parameters
     for key in ['Sigma', 'a', 'alpha', 'lambd', 'tau']:
@@ -125,7 +164,7 @@ def convergence_results(param_grid, n_jobs=-1):
 
         return pd.concat(results_df_lst)
 
-    # run markov chains in parallel
+    # run parameter configurations in parallel
     with tqdm_joblib(tqdm(desc='Simulation', total=len(param_grid_expanded))) as progress_bar:
         results_df_lst = Parallel(n_jobs=n_jobs)(
             delayed(_convergence_results_single_config)(

@@ -116,7 +116,8 @@ class LangevinSampler:
         d = len(theta)
 
         # initialise array to store samples after burn-in period
-        theta_arr = np.zeros((n_iter, d))
+        if return_arr:
+            theta_arr = np.zeros((n_iter, d))
 
         # run algorithm
         for n in np.arange(n_iter + n_burnin):
