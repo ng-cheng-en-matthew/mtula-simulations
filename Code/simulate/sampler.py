@@ -43,7 +43,7 @@ class LangevinSampler:
             self.r = 0
 
         elif targ == 'ginzburg_landau':
-            self.r = 1
+            self.r = 2
 
 
     def _potential(self, theta):
